@@ -15,21 +15,14 @@ FASTLED_USING_NAMESPACE
 #define COLOR_ORDER GRB
 CRGB leds[NUM_LEDS];
 
-/***********************************/
-CRGBPalette16 currentPalette;
-CRGBPalette16 targetPalette;
-TBlendType    currentBlending = LINEARBLEND;
-
-
 /*** WIFI ***/
 const char* ssid = "";
 const char* password = "";
 
-
 /*** MQTT ***/
-const char* mqtt_server = "192.168.0.200";
-const char* mqtt_username = "esp";
-const char* mqtt_password = "esp";
+const char* mqtt_server = "";
+const char* mqtt_username = "";
+const char* mqtt_password = "";
 const int mqtt_port = 1883;
 
 const char* light_set_topic = "leds/set";
@@ -46,9 +39,9 @@ const int BUFFER_SIZE = JSON_OBJECT_SIZE(10);
 
 /*** Globals ***/
 bool stateOn = true;
-byte red = 255;
-byte green = 255;
-byte blue = 255;
+byte red = 0;
+byte green = 0;
+byte blue = 0;
 
 byte brightness = 0;
 byte next_brightness = 10;
@@ -73,12 +66,30 @@ uint8_t ran1;
 uint8_t ran2;
 
 /*** Lightning ***/
-uint8_t frequency = 50;                                       // controls the interval between strikes
-uint8_t flashes = 8;                                          //the upper limit of flashes per strike
+uint8_t frequency = 50;                                       // Controls the interval between strikes
+uint8_t flashes = 8;                                          // The upper limit of flashes per strike
 unsigned int dimmer = 1;
 
 uint8_t ledstart;                                             // Starting location of a flash
 uint8_t ledlen;
+
+/*** MeteorRain ***/
+byte meteorSize = 3;
+byte meteorTrailDecay = 10;
+boolean meteorRandomDecay = true;
+
+/*** Cycle ***/
+int cyclespeed = 1000;
+byte cycleval = 0;
+
+/*** Breath ***/
+byte minBrightness = 0;
+
+/*** Shared ***/
+int EyeSize = 2;
+int SpeedDelay = 5;
+int ReturnDelay = 5;
+int Count = 5;
 
 
 WiFiClient espClient;
@@ -115,8 +126,6 @@ void setup() {
 void setup_wifi()
 {
   delay(10);
-  //WiFi.mode(WIFI_STA);
-  //WiFi.begin(ssid, password);
   while(WiFi.status() != WL_CONNECTED)
   {
     delay(500);
@@ -287,12 +296,60 @@ bool processJson(char* message)
     blue = root["color"]["b"];
   }
 
+  if(root.containsKey("strobecount"))
+  {
+    strobeCount = root["strobecount"];
+  }
+
+  if(root.containsKey("flashdelay"))
+  {
+    flashDelay = root["flashdelay"];
+  }
+
+  if(root.containsKey("lightning"))
+  {
+    frequency = root["lightning"]["frequency"];
+    flashes = root["lightning"]["flashes"];
+  }
+
+  if(root.containsKey("meteor"))
+  {
+    meteorSize = root["meteor"]["size"];
+    meteorTrailDecay = root["meteor"]["traildecay"];
+    meteorRandomDecay = root["meteor"]["randomdecay"];
+  }
+
+  if(root.containsKey("cyclespeed"))
+  {
+    cyclespeed = root["cyclespeed"];
+  }
+
+  if(root.containsKey("eyesize"))
+  {
+    EyeSize = root["eyesize"];
+  }
+
+  if(root.containsKey("speeddelay"))
+  {
+    SpeedDelay = root["speeddelay"];
+  }
+
+  if(root.containsKey("returndelay"))
+  {
+    ReturnDelay = root["returndelay"];
+  }
+
+  if(root.containsKey("count"))
+  {
+    Count = root["count"];
+  }
+
   return true;
 }
 
 void loop()
 {
-  
+  ArduinoOTA.handle(); 
   if(WiFi.status() != WL_CONNECTED)
   {
     delay(1);
@@ -316,20 +373,25 @@ void loop()
   else
   {
     set_effect(next_effect);
-  
+
     if(brightness < next_brightness)
     {
       fade_in();
     }
   }
-/*********/
-meteorRain( 150, 0, 58, 2, 5, true, 1);
-FastLED.show();
 
+  EVERY_N_MILLISECONDS_I(timingObj, cyclespeed)
+  {
+    timingObj.setPeriod(cyclespeed);
+    cycleval++;
+  }
+
+  FastLED.show();
 }
 
 void fade_out()
 {
+  Serial.println("FADING OUT");
   while(brightness > 0)
   {
     brightness--;
@@ -341,6 +403,7 @@ void fade_out()
 
 void fade_in()
 {
+  Serial.println("FADING IN");
   if(brightness < next_brightness)
   {
     brightness++;
@@ -354,7 +417,6 @@ void set_effect(String effectname)
 {
   if(new_effect)
   {
-    Serial.println("new effect is true");
     fade_out();
     new_effect = false;
   }
@@ -365,17 +427,12 @@ void set_effect(String effectname)
   }
   if(effectname.equals("solid"))
   {
-    solid(red,green,blue);
-    effect = effectname;
-  }
-  if(effectname.equals("palette"))
-  {
-    palette();
+    solid();
     effect = effectname;
   }
   if(effectname.equals("strobe"))
   {
-    strobe(red,green,blue,5,300);
+    strobe();
     effect = effectname;
   }
   if(effectname.equals("rainbow"))
@@ -398,9 +455,65 @@ void set_effect(String effectname)
     ease();
     effect = effectname;
   }
-  if(effectname.equals("fillgrad"))
+  if(effectname.equals("fill_grad"))
   {
     fill_grad();
+    effect = effectname;
+  }
+  if(effectname.equals("lightning"))
+  {
+    lightning();
+    effect = effectname;
+  }
+  if(effectname.equals("cylonbounce"))
+  {
+    FastLED.setBrightness(next_brightness);
+    CylonBounce();
+    effect = effectname;
+  }
+  if(effectname.equals("centertooutside"))
+  {
+    FastLED.setBrightness(next_brightness);
+    CenterToOutside();
+    effect = effectname;
+  }
+  if(effectname.equals("outsidetocenter"))
+  {
+    FastLED.setBrightness(next_brightness);
+    OutsideToCenter();
+    effect = effectname;
+  }
+  if(effectname.equals("lefttoright"))
+  {
+    FastLED.setBrightness(next_brightness);
+    LeftToRight();
+    effect = effectname;
+  }
+  if(effectname.equals("righttoleft"))
+  {
+    FastLED.setBrightness(next_brightness);
+    RightToLeft();
+    effect = effectname;
+  }
+  if(effectname.equals("twinkle"))
+  {
+    Twinkle();
+    effect = effectname;
+  }
+  if(effectname.equals("twinklerandom"))
+  {
+    TwinkleRandom();
+    effect = effectname;
+  }
+  if(effectname.equals("meteorrain"))
+  {
+    FastLED.setBrightness(next_brightness);
+    meteorRain();
+    effect = effectname;
+  }
+  if(effectname.equals("cycle"))
+  {
+    cycle();
     effect = effectname;
   }
 }
@@ -438,28 +551,17 @@ void police()
   delay(250);
 }
 
-void palette()
+void solid()
 {
-  CRGBPalette16 currentPalettestriped;
-  static uint8_t startIndex = 0;
-    startIndex = startIndex + 1; /* higher = faster motion */
-    fill_palette( leds, NUM_LEDS,
-                  startIndex, 16, /* higher = narrower stripes */
-                  currentPalettestriped, 255, LINEARBLEND);
+  fill_solid(leds, NUM_LEDS, CRGB(red,green,blue));
   FastLED.show();
 }
 
-void solid(byte r, byte g, byte b)
-{
-  fill_solid(leds, NUM_LEDS, CRGB(r,g,b));
-  FastLED.show();
-}
-
-void strobe(byte r, byte g, byte b, int strobeCount, int flashDelay)
+void strobe()
 {
   for(int i = 0; i < strobeCount; i++)
   {
-    fill_solid(leds, NUM_LEDS, CRGB(r,g,b));
+    fill_solid(leds, NUM_LEDS, CRGB(red,green,blue));
     FastLED.show();
     delay(flashDelay);
     fill_solid(leds, NUM_LEDS, CRGB::Black);
@@ -564,7 +666,7 @@ void lightning()
   delay(random8(frequency)*100);
 }
 
-void CylonBounce(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay){
+void CylonBounce(){
 
   for(int i = 0; i < NUM_LEDS-EyeSize-2; i++) {
     fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
@@ -593,7 +695,7 @@ void CylonBounce(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, i
   delay(ReturnDelay);
 }
 
-void CenterToOutside(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay) {
+void CenterToOutside() {
   for(int i =((NUM_LEDS-EyeSize)/2); i>=0; i--) {
     fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
    
@@ -615,7 +717,7 @@ void CenterToOutside(byte red, byte green, byte blue, int EyeSize, int SpeedDela
   delay(ReturnDelay);
 }
 
-void OutsideToCenter(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay) {
+void OutsideToCenter() {
   for(int i = 0; i<=((NUM_LEDS-EyeSize)/2); i++) {
     fill_solid(leds,NUM_LEDS, CRGB(0,0,0));
    
@@ -637,7 +739,7 @@ void OutsideToCenter(byte red, byte green, byte blue, int EyeSize, int SpeedDela
   delay(ReturnDelay);
 }
 
-void LeftToRight(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay) {
+void LeftToRight() {
   for(int i = 0; i < NUM_LEDS-EyeSize-2; i++) {
     fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
     leds[i] = CRGB(red/10, green/10, blue/10);
@@ -651,7 +753,7 @@ void LeftToRight(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, i
   delay(ReturnDelay);
 }
 
-void RightToLeft(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, int ReturnDelay) {
+void RightToLeft() {
   for(int i = NUM_LEDS-EyeSize-2; i > 0; i--) {
     fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
     leds[i] = CRGB(red/10, green/10, blue/10);
@@ -665,37 +767,31 @@ void RightToLeft(byte red, byte green, byte blue, int EyeSize, int SpeedDelay, i
   delay(ReturnDelay);
 }
 
-void Twinkle(byte red, byte green, byte blue, int Count, int SpeedDelay, boolean OnlyOne) {
+void Twinkle() {
   fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
  
   for (int i=0; i<Count; i++) {
      leds[random(NUM_LEDS)] = CRGB(red,green,blue);
      FastLED.show();
      delay(SpeedDelay);
-     if(OnlyOne) {
-       fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
-     }
    }
  
   delay(SpeedDelay);
 }
 
-void TwinkleRandom(int Count, int SpeedDelay, boolean OnlyOne) {
+void TwinkleRandom() {
   fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
  
   for (int i=0; i<Count; i++) {
      leds[random(NUM_LEDS)] = CRGB(random(0,255),random(0,255),random(0,255));
      FastLED.show();
      delay(SpeedDelay);
-     if(OnlyOne) {
-       fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
-     }
    }
  
   delay(SpeedDelay);
 }
 
-void meteorRain(byte red, byte green, byte blue, byte meteorSize, byte meteorTrailDecay, boolean meteorRandomDecay, int SpeedDelay) {  
+void meteorRain() {  
   fill_solid(leds, NUM_LEDS, CRGB(0,0,0));
  
   for(int i = 0; i < NUM_LEDS+NUM_LEDS; i++) {
@@ -742,4 +838,13 @@ void fadeToBlack(int ledNo, byte fadeValue) {
    // FastLED
    leds[ledNo].fadeToBlackBy( fadeValue );
  #endif  
+}
+
+void cycle() 
+{
+  CHSV hsv(cycleval, 255, 200);
+  CRGB rgb;
+  hsv2rgb_spectrum(hsv, rgb);
+  fill_solid(leds,NUM_LEDS, rgb);
+  FastLED.show();
 }
